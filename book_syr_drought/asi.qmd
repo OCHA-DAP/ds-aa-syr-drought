@@ -1,0 +1,75 @@
+
+## Agricultural Stress Index (ASI) Analysis 
+
+Syria 2024/2025 Drought Season
+
+This section analyzes the evolution and spatial distribution of the Agricultural Stress Index (ASI) across Syrian governorates during the critical 2024/2025 winter cropping season (November 2024 to April 2025), a period highlighted in FAO’s drought alert as the most severe in 36 years.
+
+We use ASI data obtained through the `cumulus` R package via FAO GIEWS, filtered by province and dekad to explore stress trends across crop-growing areas.
+
+### Load and Filter ASI Data
+
+
+
+```{r}
+box::use(
+  cumulus
+)
+box::use(
+  lubridate[...],
+  dplyr[...],
+  tidyr[...],
+  readr[...],
+  ggplot2[...],
+  glue[...],
+  forcats[...],
+  gghdx[...]
+)
+df_asi <- cumulus$fao_asi_adm1_tabular(iso3 = "syr")
+
+gghdx()
+```
+
+```{r}
+df_filtered <- df_asi |> 
+  mutate(
+    mo_num = as.numeric(Month),
+       harvest_year = case_when(
+      mo_num %in% c(11, 12) ~ Year + 1,
+      TRUE ~ Year
+    ),
+    mo_chr = fct_expand(month.abb[mo_num],month.abb),
+    date = glue("{Year}-{Month}-21")
+  ) |> 
+  filter(
+    Dekad == 3,
+    mo_num %in% c(11,12,1,2,3,4)
+  )
+
+
+df_filtered |> 
+  mutate(
+    mo_fct= fct_relevel(mo_chr, c("Nov","Dec","Jan","Feb","Mar","Apr")),
+    harvest_year_label = case_when(
+      harvest_year %in% c(2023:2025)~as.character(harvest_year),
+      .default =  "Other"
+    ),
+        alpha_flag = if_else(harvest_year_label == "Other", "low", "high")  # for alpha mapping
+
+  ) |> 
+  ggplot(
+    aes(x= mo_fct,
+        y= Data,
+        group = harvest_year,
+        color =harvest_year_label,
+        alpha = alpha_flag)
+  )+
+   scale_alpha_manual(values = c("low" = 0.3, "high" = 1)) +
+  # scale_alpha_discrete(values = c("other"=0.1))+
+  # geom_point()+
+  geom_line()+
+  facet_wrap(~Province)
+
+```
+
+

@@ -2,3 +2,8 @@
 .Rhistory
 .RData
 .Ruserdata
+
+book_syr_drought/_book/
+book_syr_drought/_publish.yml
+
+book_syr_drought/_freeze/

@@ -1,0 +1,4 @@
+- source: project
+  netlify:
+    - id: 6448b267-03d9-4a23-bded-631925132d09
+      url: 'https://spiffy-rugelach-fa966a.netlify.app'
