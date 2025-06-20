@@ -68,7 +68,10 @@ df_filtered |>
   # scale_alpha_discrete(values = c("other"=0.1))+
   # geom_point()+
   geom_line()+
-  facet_wrap(~Province)
+  facet_wrap(~Province)+
+  theme(
+    axis.text.x = element_text(angle = 90)
+  )
 
 ```
 
