@@ -6,7 +6,7 @@ jupyter: ds-aa-syr-drought
 book:
   title: "Anticipatory Action - Syria Drought"
   author: "OCHA Centre for Humanitarian Data"
-  date: "13/05/2024"
+  date: "06/23/2025"
   chapters:
     - index.qmd
     - intro.qmd
