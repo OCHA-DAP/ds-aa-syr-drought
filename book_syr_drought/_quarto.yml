@@ -11,6 +11,7 @@ book:
     - index.qmd
     - intro.qmd
     - 01_asi.qmd
+    - 02_era5.qmd
 
 bibliography: references.bib
 
