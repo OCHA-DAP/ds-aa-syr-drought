@@ -1,0 +1,260 @@
+## Seasonal Precipitation Summary (ERA5 Reanalysis)
+
+This section gives an overview of precipitation from the 2024/2025 season, derived from ECMWF's ERA5 Reanalysis product. 
+
+```{r}
+get_historical_rainfall <- function(table, iso3, adm_level, sel_zones = NULL, stage = "prod") {
+  # Get the historical rainfall data from the database to selected zones
+  conn <- pg_con(stage = stage, write = FALSE)
+  query <- glue("SELECT * from {table} WHERE iso3='{iso3}' AND adm_level={adm_level}")
+  df_precip <- dbGetQuery(conn, query)
+  if (!is.null(sel_zones)) {
+    df_precip <- df_precip %>%
+      filter(pcode %in% sel_zones)
+  }
+  return(df_precip)
+}
+
+assign_season_year <- function(months_to_include) {
+  # Check if season crosses year boundary
+  crosses_year <- 12 %in% months_to_include && 1 %in% months_to_include
+  
+  if (crosses_year) {
+    # Strategy: assign all months from the "late year" part to next season year
+    # Find months that are in the "late" part of the year (typically Oct-Dec)
+    late_year_months <- months_to_include[months_to_include >= 10]
+    
+    function(month, year) {
+      ifelse(month %in% late_year_months, year + 1, year)
+    }
+  } else {
+    # For within-year seasons, use calendar year
+    function(month, year) year
+  }
+}
+
+get_cogs_to_process <- function(container, dataset, months_to_include, issued_month) {
+    
+    # Get dataframe of all COGs available for that dataset
+    dir_name <- paste0(dataset, "/monthly/processed")
+    cog_df <- AzureStor::list_blobs(
+        container = container,
+        dir = dir_name
+    )
+    
+    # Now filter down to only those we're interested in
+    if (dataset == "seas5") {
+        # Given the `issued_month` and the valid months we want to include, 
+        # work backwards to calculate the leadtimes 
+        lead_times <- (months_to_include + 12 * (months_to_include < issued_month)) - issued_month
+        
+        cog_df <- cog_df %>%
+            dplyr::mutate(
+                year = str_extract(name, "i(\\d{4})") %>% str_remove("i") %>% as.integer(), 
+                month = str_extract(name, "-(\\d{2})-") %>% str_remove_all("-") %>% as.integer(),
+                lt = str_extract(name, "lt\\d+") %>% str_remove("lt") %>% as.integer()
+            ) %>%
+            dplyr::filter(
+                month == issued_month,
+                lt %in% lead_times
+            )
+    
+    } else if (dataset == "era5") {
+    cog_df <- cog_df %>%
+        dplyr::mutate(
+            year = str_extract(name, "v(\\d{4})") %>% str_remove("v") %>% as.integer(),
+            month = str_extract(name, "-(\\d{2})-") %>% str_remove_all("-") %>% as.integer()
+        ) %>%
+        dplyr::filter(month %in% months_to_include)
+    }
+
+    return(cog_df)
+}
+```
+
+``` {r}
+
+box::use(
+    cumulus[...]
+)
+box::use(
+    dplyr[...],
+    tidyr[...],
+    ggplot2[...],
+    glue[...],
+    gghdx[...],
+    RPostgres[...],
+    lubridate[...],
+    stringr[...],
+    terra[...],
+    tidyterra[...],
+    patchwork[...]
+)
+
+iso3 <- "SYR"
+adm_level <- 1
+dataset <- "era5"
+months_to_include <- c(11, 12, 1, 2, 3, 4)
+year <- 2025
+gdf <- cumulus::download_fieldmaps_sf(iso3, glue("{iso3}_adm{adm_level}"))[[1]]
+
+pcode_col <- "ADM1_PCODE"
+
+df_era5 <- get_historical_rainfall(dataset, iso3, adm_level, NULL)
+
+gghdx()
+```
+
+```{r}
+df_era5_proc <- df_era5 %>% 
+    mutate(year = year(valid_date), month = month(valid_date)) %>%
+    # Transform mm/day to mm/month
+    mutate(mean = mean * lubridate::days_in_month(valid_date)) %>%
+    filter(month %in% months_to_include) %>%
+    # Apply season year assignment
+    mutate(season_year = assign_season_year(months_to_include)(month, year)) %>%
+    group_by(pcode, season_year) %>% 
+    # Only keep complete seasons (all months present)
+    filter(n() == length(months_to_include)) %>%
+    summarise(total_rainfall = sum(mean, na.rm = TRUE), .groups = "drop") %>%
+    arrange(pcode, season_year) %>%
+    mutate(season_year = as.numeric(season_year)) %>%
+    group_by(pcode) %>%
+    mutate(
+    tercile = ntile(total_rainfall, 3),
+    quartile = ntile(total_rainfall, 4),
+    is_lower_tercile = tercile == 1,
+    is_lower_quartile = quartile == 1
+    ) %>%
+    mutate(
+    rank = rank(total_rainfall, ties.method = "average"),
+    exceedance_prob = rank / (n() + 1),
+    return_period = 1 / exceedance_prob
+    ) %>%
+    ungroup()
+
+
+df_sel <- df_era5_proc %>%
+    filter(season_year == year)
+gdf_sel <- gdf %>%
+    full_join(df_sel, by = setNames("pcode", "ADM1_PCODE"))
+gdf_lower <- gdf_sel %>%
+    filter(is_lower_tercile == TRUE)
+```
+
+
+## Return periods per Province
+
+```{r}
+ggplot() +
+    geom_sf(data = gdf_sel, aes(fill = return_period)) +
+    geom_sf(data = gdf_lower, aes(color = glue("Lower tercile rainfall")), fill = NA,linewidth =0.5 ) +
+    scale_color_manual(
+        name = NULL,  # No title for boundary legend
+        values = c("Lower tercile rainfall" = "tomato")  # Color for the boundary lines
+    ) +
+    scale_fill_gradient_hdx_tomato(na.value = "lightgrey", name="Return Period (years)")+
+    labs(
+        title = glue("Rainfall Return Periods"),
+        caption = "Higher return periods indicate rarer low-rainfall events"
+    )
+```
+
+
+## Percipitation anomalies
+
+```{r}
+
+proj_container <- cumulus::blob_containers("dev")$projects
+rast_container <- cumulus::blob_containers("prod")$raster
+tmp_dir <- "tmp/"
+azure_dir <- "ds-seasonal-bulletin/"
+src_cog_dir <- paste0(dataset, "/monthly/processed")
+
+cog_df <- get_cogs_to_process(
+    rast_container,
+    dataset,
+    months_to_include,
+    NULL
+) %>%
+  mutate(season_year = assign_season_year(months_to_include)(month, year))
+
+yearly_sums <- list()
+for (sel_year in unique(cog_df$season_year)) {
+  yearly_cogs <- filter(cog_df, year == sel_year)
+  urls <- paste0("/vsiaz/raster/", yearly_cogs$name)
+  cogs <- rast(urls)
+  cogs_clipped <- crop(cogs, gdf)
+  cogs_masked <- mask(cogs_clipped, gdf)
+  # go from mm/day to mm/month
+  yearly_sum <- sum((cogs_masked * 30))
+  if (sel_year == max(cog_df$season_year)) {
+      r_cur <- yearly_sum
+  }
+  yearly_sums <- append(yearly_sums, yearly_sum)
+}
+
+r_avg <- mean(yearly_sums)
+
+```
+
+```{r}
+
+season_avg <- r_avg
+current_yearly_sum <- r_cur
+gdf <- gdf_sel
+
+all_values <- c(values(season_avg), values(current_yearly_sum))
+global_min <- min(all_values, na.rm = TRUE)
+global_max <- max(all_values, na.rm = TRUE)
+
+# Mask rasters with gdf_sel
+season_avg_masked <- mask(season_avg, gdf)
+current_yearly_sum_masked <- mask(current_yearly_sum, gdf)
+anomaly_masked <- mask(current_yearly_sum - season_avg, gdf)
+
+# Calculate max absolute anomaly for symmetric scale
+max_abs_anomaly <- max(abs(values(anomaly_masked)), na.rm = TRUE)
+
+# Plot the average historical
+avg_plot <- ggplot() +
+geom_spatraster(data = season_avg_masked, na.rm = TRUE) +
+geom_sf(data = gdf, fill = NA, color = "darkgrey", linewidth = 0.3) +
+scale_fill_gradient_hdx_sapphire(
+    name = "Rainfall\n(mm)",
+    limits = c(global_min, global_max)
+) +
+theme(plot.title = element_text(size = 12, hjust = 0.5),
+    axis.text.y = element_blank(),
+    axis.text.x = element_blank()
+) +
+labs(title = "Average historical")
+
+# Plot the anomalies against the upcoming season
+anomaly_plot <- ggplot() +
+geom_spatraster(data = anomaly_masked, na.rm = TRUE) +
+geom_sf(data = gdf, fill = NA, color = "darkgrey", linewidth = 0.3) +
+scale_fill_gradient2(
+    low = "red",
+    mid = "white",
+    high = "blue",
+    midpoint = 0,
+    limits = c(-max_abs_anomaly, max_abs_anomaly),
+    na.value = NA,
+    name = "Rainfall\nAnomaly (mm)"
+) +
+theme(plot.title = element_text(size = 12, hjust = 0.5),
+    axis.text.y = element_blank(),
+    axis.text.x = element_blank()
+) + 
+labs(title = "Anomalies")
+
+# Combine the two plots
+combined_plot <- wrap_plots(list(avg_plot, anomaly_plot), nrow = 1) +
+plot_annotation(
+    title = "Anomalies in total seasonal rainfall",
+    theme = theme(plot.title = element_text(size = 14))
+)
+
+combined_plot
+```
