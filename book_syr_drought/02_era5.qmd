@@ -89,7 +89,8 @@ box::use(
     terra[...],
     tidyterra[...],
     patchwork[...],
-    sf[...]
+    sf[...],
+    gt[...]
 )
 
 
@@ -167,6 +168,24 @@ ggplot() +
         title = glue("Rainfall Return Periods"),
         caption = "Higher return periods indicate rarer low-rainfall events"
     )
+
+
+gdf_sel |> 
+  st_drop_geometry() |> 
+  arrange(desc(return_period)) |> 
+  select(ADM1_EN, return_period) |>
+  gt() |> 
+  fmt_number(
+    columns = return_period,
+    decimals = 1,
+    use_seps = TRUE) |> 
+  cols_label(
+    ADM1_EN = "Province",
+    return_period = "Return Period"
+  ) |> 
+  tab_options(
+    column_labels.background.color = "#55b284ff"
+  )
 ```
 
 
