@@ -88,15 +88,24 @@ box::use(
     stringr[...],
     terra[...],
     tidyterra[...],
-    patchwork[...]
+    patchwork[...],
+    sf[...]
 )
 
-iso3 <- "SYR"
+
+# For raster processing from Azure Storage
+Sys.setenv("AZURE_STORAGE_ACCOUNT"=Sys.getenv("DSCI_AZ_PROD_STORAGE_ACCOUNT"))
+Sys.setenv("AZURE_STORAGE_SAS_TOKEN"=Sys.getenv("DSCI_AZ_BLOB_PROD_SAS"))
+
+
+iso3 <- c("SYR","SOM")[2]
 adm_level <- 1
 dataset <- "era5"
-months_to_include <- c(11, 12, 1, 2, 3, 4)
+months_to_include <- list("SYR" = c(11, 12, 1, 2, 3, 4),"SOM"= c(3,4,5,6))[[iso3]]
 year <- 2025
 gdf <- cumulus::download_fieldmaps_sf(iso3, glue("{iso3}_adm{adm_level}"))[[1]]
+gdf_bbox <- ext(st_bbox(gdf) )
+
 
 pcode_col <- "ADM1_PCODE"
 
@@ -164,11 +173,9 @@ ggplot() +
 ## Percipitation anomalies
 
 ```{r}
-
 proj_container <- cumulus::blob_containers("dev")$projects
-rast_container <- cumulus::blob_containers("prod")$raster
-tmp_dir <- "tmp/"
-azure_dir <- "ds-seasonal-bulletin/"
+rast_container <- cumulus::blob_containers("prod",write_access = F)$raster
+
 src_cog_dir <- paste0(dataset, "/monthly/processed")
 
 cog_df <- get_cogs_to_process(
@@ -181,9 +188,10 @@ cog_df <- get_cogs_to_process(
 
 yearly_sums <- list()
 for (sel_year in unique(cog_df$season_year)) {
+  cat(sel_year,"\n")
   yearly_cogs <- filter(cog_df, year == sel_year)
   urls <- paste0("/vsiaz/raster/", yearly_cogs$name)
-  cogs <- rast(urls)
+  cogs <- rast(urls, win = gdf_bbox)
   cogs_clipped <- crop(cogs, gdf)
   cogs_masked <- mask(cogs_clipped, gdf)
   # go from mm/day to mm/month
